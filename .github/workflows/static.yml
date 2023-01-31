@@ -1,0 +1,669 @@
+---
+title: "Fortune 1000 dataset analysis"
+author: "BARBATO Nicolò, GATTONE Thomas, LOZANO Diego, RODRIGUEZ Sergio"
+output: 
+  html_document: 
+    toc: yes
+    toc_float: yes
+date: "2023-01-24"
+---
+
+```{r, message=FALSE}
+library(tidyverse)
+library(dplyr)
+library(readr)
+library(readxl)
+library(data.table)
+library(DT)
+library(dataMaid)
+library(PerformanceAnalytics)
+library(ggplot2)
+library(ggstatsplot)
+library(ggpubr)
+library(sjPlot)
+library(sjstats)
+library(gridExtra)
+library(knitr)
+library(broom)
+library(lattice)
+library(gtsummary)
+library(maps)
+library(mapproj)
+```
+
+```{r, message=FALSE}
+companies=read_csv("~/Desktop/MSc in Business Analytics/Programming for Business Analytics/Neoma_group 2/Fortune_1000.csv")
+```
+
+# Introduction: presentation of the data and scope of the project
+
+![](images/Fortune%201000.jpeg){width="40%" height="40%"}
+
+## By Nicolò BARBATO and Thomas GATTONE
+
+The Fortune 1000 are the 1,000 largest American companies ranked by revenues, as compiled by the American business magazine Fortune. It only includes companies which are incorporated or authorized to do business in the United States, and for which revenues are publicly available. It contains U.S. company data for the year 2022 (updated to 2021). The dataset collects 18 variables (columns) for 1000 observations (rows).
+
+```{r}
+dim(companies)
+```
+
+The observed variables are the following:
+
+-   *Company* - name of the company.\
+-   *Rank* - 2021 rank established by Fortune (1-1000).\
+-   *Rank Change* - change in the rank from 2020 to 2021. This information is only available for the top 500 companies.\
+-   *Revenue* - revenue of each company in millions. This is the criteria used to rank each company.\
+-   *Profit* - Profit of each company in millions.\
+-   *Number of Employees* - number of employees each company employs.\
+-   *Sector* - sector of the market the company operates in.\
+-   *City* - city where the company's headquarters is located.\
+-   *State* - state where the company's headquarters is located.\
+-   *Newcomer* - indicates whether or not the company is new to the top Fortune 500 ("yes" or "no"). No value will be listed for companies outside of the top 500.\
+-   *CEO Founder* - indicates whether the CEO of the company is also the founder ("yes" or "no").\
+-   *CEO Woman* - indicates whether the CEO of the company is a woman ("yes" or "no").\
+-   *Profitable* - indicates whether the company is profitable or not ("yes" or "no").\
+-   *Prev. Rank* - the 2020 rank of the company, as established by Fortune. This information is only available for the top 500 companies.\
+-   *CEO* - the name of the CEO of the company.
+-   *Website* - the url of the company website.
+-   *Ticker* - the stock ticker symbol of public companies. Some rows will have empty values because the company is a private corporation.\
+-   *Market Cap* - the market cap (or value) of the company in millions. Some rows will have empty values because the company is private. Market valuations were determined on January 20, 2021.
+
+```{r}
+companies %>% 
+  datatable(options = list(scrollX = TRUE))
+```
+
+In the following sections of the project, the dataset will be subject to data preparation and cleaning in order to be appropriate to perform an Exploratory Data Analysis (EDA) and to find relevant patterns among the variables and to answer the following questions:\
+1. Investigation of the relationship between market capitalization and profits\
+2. Do revenues depend on the number of employees?\
+3. Is there a pattern among sectors in rank changing? Are there sectors that on average have gained/lost positions in the ranking?\
+4. Analysis of the pattern between revenues and profits. Are there sectors that have a higher impact of costs? Profit margin analysis per sector\
+5. Analysis of the best performers per sector VS gender of the CEO\
+6. Analysis of revenue per state
+
+# Data preparation and cleaning
+
+![](images/data%20cleaning.png){width="40%" height="40%"}
+
+## By Nicolò BARBATO and Thomas GATTONE
+
+Data preparation steps are here provided according to the scope of the analysis. The following chunk aims at providing a brief summary of the data while highlighting possible errors like inappropriate data types, missing values, duplicated values, and so on.
+
+```{r}
+companies %>% 
+  summarize()
+```
+
+Despite the above-not-so-friendly user output, this kind of summary is preferable for inspection purposes, since it is able to group and show all the needed information.
+
+The first cleaning operation are the following:
+
+-   Data types are changed to allow future quantitative analysis.
+-   Useless columns for the purpose of the analysis and columns containing redundant information (like profitable and previous rank) are removed to streamline the dataset.
+-   Some columns have been rearranged to provide a better presentation.
+
+```{r}
+companies=companies %>%
+  mutate(`num. of employees`=as.integer(`num. of employees`),
+         newcomer=as.logical(ifelse(newcomer=="no",0,1)),
+         ceo_founder=as.logical(
+           ifelse(ceo_founder=="no",0,1)),
+         ceo_woman=as.logical(ifelse(ceo_woman=="no",0,1)),
+         profitable=as.logical(ifelse(profitable=="no",0,1)),
+         `Market Cap`=as.numeric(companies$`Market Cap`)) %>%
+  select(-profitable, -prev_rank, -Website, - CEO) %>%
+  relocate(c("rank", "rank_change"), .before="company")
+```
+
+As visible from the warning message, NAs values were introduced. Thus, the next pivotal step is to find missing values (NAs) and to assess whether they are reasonable and acceptable or whether they need to be managed in some way.
+
+```{r}
+summary(is.na(companies))
+```
+
+Ticker and Market Cap columns might display missing values when the company is private. Therefore, we would expect them to have the same number of NAs, but this is not the case. In particular, it seems that Ticker has 10 exceeding NAs, that need to be filled. By filtering the observations with the double condition that *Ticker is NA* and *Market Cap is not NA*, we can find the observations that we need to manage. We decided to solve the problem by searching for their tickers in the Internet and by inserting them accordingly.
+
+```{r}
+companies %>%
+  filter(is.na(companies$Ticker) & !is.na(companies$`Market Cap`)) %>%
+  select(company, Ticker, `Market Cap`) %>%
+  datatable(options = list(scrollX = TRUE))
+Tickerdf=data.frame(Ticker1=c("CERN", "CNR", "TWTR", "SAFM", "ANAT", "UFS", "MTOR", "REGI", "CHNG", "ZNGA"))
+companiesDF=companies %>%
+  filter(is.na(companies$Ticker) & !is.na(companies$`Market Cap`)) %>%
+  bind_cols(Tickerdf)%>%
+  select(-Ticker)%>%
+  rename("Ticker"="Ticker1")
+companies_all=companies %>% 
+  anti_join(companiesDF, by="rank") %>%
+  bind_rows(companiesDF)
+```
+
+As shown below, now the number of NAs is the same for the two columns and column Ticker column is filled as desired.
+
+```{r}
+companies_all %>%
+  filter(Ticker=="CERN" | Ticker=="CNR" | Ticker=="TWTR" | Ticker=="SAFM" | Ticker=="ANAT" | Ticker=="UFS" | Ticker=="MTOR" | Ticker=="REGI" | Ticker=="CHNG" | Ticker=="ZNGA") %>%
+  select(company, Ticker, `Market Cap`) %>%
+  datatable(options = list(scrollX = TRUE))
+```
+
+NAs are correct only when displayed for both Market Cap and Ticker, because it means the company is private. However, to make the dataset easy to read and to interpret, it might be desirable to insert "Private company" in Ticker and 0 as Market Cap for private companies.
+
+```{r}
+companies_all=companies_all %>% 
+  mutate(Ticker=ifelse(is.na(Ticker), "Private company", Ticker), 
+         `Market Cap` =ifelse(is.na(`Market Cap`), 0, `Market Cap`))
+companies_all %>% 
+  filter(is.na(Ticker) | is.na(`Market Cap`)) %>% 
+  datatable(options = list(scrollX = TRUE))
+```
+
+We continue the data cleaning by renaming the columns as desired.
+
+```{r}
+colnames(companies_all)=c("Rank", "Rank_change", "Company", "Revenue", "Profit", "Number_employees", "Sector", "City", "State", "Newcomer", "CEO_founder", "CEO_woman", "Ticker", "Market_cap")
+```
+
+As shown in the first summary performed, missing valued are observed also for some quantitative columns that will be used afterwards to highlight relevant patterns. In this chunk we correct the problem of missing values in *profit* and *number of employees* by forcing the mean value of the variable. The statistic used is the trimmed mean, as it is not affected by possible outliers.
+
+```{r}
+companies_all %>% 
+  filter(is.na(Profit) | is.na(Number_employees)) %>% 
+  select(Company, Profit, Number_employees) %>% 
+  datatable(options = list(scrollX = TRUE))
+companies_all=companies_all %>% 
+  mutate(Profit=ifelse(is.na(Profit), 
+                       mean(Profit, trim=0.05 , na.rm = TRUE),
+                       Profit),
+         Number_employees=as.integer(ifelse(
+           is.na(Number_employees),
+           round(mean(Number_employees, trim=0.05, 
+                      na.rm = TRUE), 0),
+           Number_employees)))
+```
+
+The summary showed 3 duplicated values for the ranking column, but it does not make sense: each company should have a unique ranking position.
+
+```{r}
+companies_all %>% 
+  filter(duplicated(Rank)) %>% 
+  datatable(options = list(scrollX = TRUE))
+companies_all=companies_all %>% 
+  mutate(Rank=ifelse(duplicated(Rank), Rank+1, Rank))
+companies_all %>% 
+  filter(duplicated(Rank)) %>% 
+  datatable(options = list(scrollX = TRUE))
+```
+
+Sectors will be a core variable in the identification of patterns in the following sections of the project. Therefore, it is important to inspect the variable and to understand how many distinct sectors are there. We see that the string "Food" appears in two sectors, that can be grouped together as a single one. This is desirable because otherwise the analysis might be misleading: if we looked for patterns by considering only one of the two sectors, we would be missing part of the observations belonging to the "Food" sector.
+
+```{r}
+unique(companies_all$Sector) %>% 
+  as_tibble()
+wrong_sp=companies_all %>%
+  filter(grepl("^Food", Sector)) %>%
+  select(Sector) %>%
+  unlist()
+companies_all=companies_all %>%
+  mutate(Sector=ifelse(Sector %in% wrong_sp, "Food, Beverages, Tobacco & Drug Stores", Sector))
+companies_all %>%
+  filter(grepl("^Food", Sector)) %>%
+  select(Company, Sector) %>%
+  datatable(options = list(scrollX = TRUE))
+```
+
+# Exploratory Data Analysis (EDA)
+
+![](images/EDA.png){width="40%" height="40%"}
+
+## By Nicolò BARBATO and Thomas GATTONE
+
+The EDA starts with a summary of the quantitative variables in a table to show the main statistics and with an histogram for graphical representation of the mean value.
+
+```{r}
+companies_all[, c("Revenue", "Profit", "Number_employees", "Market_cap")] %>%
+  sapply(function(x) round(summary(x), 2)) %>% 
+  datatable(options = list(scrollX = TRUE))
+```
+
+```{r}
+EDA_chart=companies_all %>% 
+  select(Market_cap, Revenue, Profit, Number_employees)
+EDA_chart %>% 
+  summarise_all(mean) %>% 
+  gather() %>% 
+  ggplot(aes(x = key, y = value)) +
+  geom_col(fill = "grey") +
+  coord_flip() +
+  labs(x = "Variables", y = "Mean Value")
+```
+
+How are these quantitative variables distributed? Are there outliers? Box plots can provide an answer to these questions.
+
+```{r}
+boxplot(EDA_chart$Revenue)
+boxplot(EDA_chart$Profit)
+boxplot(EDA_chart$Number_employees)
+boxplot(EDA_chart$Market_cap)
+```
+
+All the variables are clearly affected by a small number of observations that display huge values (outliers) compared to the majority of the observations. These values might create problems when building predictive models.
+
+It is also interesting, before discovering patterns and relationship, to have a first look at the correlation among variables.
+
+```{r}
+suppressWarnings(EDA_chart %>% 
+  chart.Correlation()) 
+```
+
+We can notice an outstanding positive correlation between *Revenue - Number_employees* and between *Profit - Market_cap*. It is worth mentioning that correlation in not causation, hence, the statistic does not provide information about the direction of the causality. It just indicates that the two variables follows the same pattern, but this might also be due to another unobserved correlated variable.
+
+# Relationship among data and Visualization
+
+![](images/Data%20visualization.png){width="40%" height="40%"}
+
+## Investigation of the relationship between market capitalization and profits
+
+### By Thomas GATTONE
+
+One potential pattern worth exploring is the relationship between market capitalization and profits. This insight results from the deepening of the previous EDA, in which a strong correlation between the above-mentioned variables have emerged.
+
+In order to investigate further and allow an automation of the task for future analysis with dashboards, a user-defined function is created. The latter, starting from a data frame and two variables, it will firstly investigate whether the correlation between the variables is strong enough. Afterwards, it will generate the related plot and the regression output to allow a better investigation of the problem.
+
+```{r}
+cor(companies_all$Profit, companies_all$Market_cap)
+Linear_relationship=function(data, x, y) {
+  
+  #eligibility test
+  if(cor(x, y)<0.6) {
+    stop("Correlation between specified variables is too weak")
+  }
+  library(ggplot2)
+  library(PerformanceAnalytics)
+  library(ggpubr)
+  library(knitr)
+  library(gridExtra)
+  library(sjPlot)
+  library(sjstats)
+  library(DT)
+  library(broom)
+  
+  # #first table
+  firsttable=data %>%
+    ggplot() +
+    aes(x = x, y = y) +
+    geom_point(shape = "bullet", size = 2, colour = "#112446") +
+    geom_smooth(method = "lm", se = FALSE) +
+    labs(
+    title = "Linear relationship between x and y",
+    subtitle = paste("Correlation =", round(cor(x, y), 2))) +
+    theme_linedraw()
+  
+  print(firsttable)
+  
+  #second table
+  secondtable=data.frame(x, y)
+  suppressWarnings(chart.Correlation(secondtable)) 
+  
+  #third table
+  thirdtable=lm(y~x, data = data)
+  summary(thirdtable)
+  
+}
+Linear_relationship(companies_all, companies_all$Profit, companies_all$Market_cap)
+```
+
+In order to be sure that the defined function is correctly coded, a test is performed to see whether the output is the one expected when the variables show a correlation lower than the threshold (60%).
+
+```{r, echo=TRUE, error=TRUE}
+cor(companies_all$Profit, companies_all$Number_employees)
+Linear_relationship(companies_all, companies_all$Profit, companies_all$Number_employees)
+```
+
+As stated before, it is possible to see there is a strong correlation (83%) which is statistically significant. Moreover, the linear relationship seems to be positive, even if it is clear that there are severe outliers in the data set considered. To better clarify this step, we can analyse the histogram that relates the corporate profits and the related frequency.
+
+```{r}
+hist(companies_all$Profit)
+```
+
+The distribution is positively skewed, meaning that there are severe outliers that make the sample biased and, therefore, not suitable for performing inference.
+
+To conclude, after all the above-mentioned discussion, it is possible to state that there is a positive relationship between the economic performance of a company (measured as profit) and the market capitalization. However, the test population is heavily influenced and, thus, biased by the presence of severe outliers which do not allow further investigate unless properly contextualized.
+
+Again, worth of mention, is to see whether the presence of a female CEO affects the relationship.
+
+```{r}
+companies_all %>%
+ filter(!(Sector %in% c("Food & Drug Stores", "Motor Vehicles & Parts", "Food, Beverages & Tobacco", 
+"Aerospace & Defense", "Hotels, Restaurants & Leisure", "Engineering & Construction"))) %>%
+ ggplot() +
+  aes(x = Profit, y = Market_cap, colour = CEO_woman) +
+  geom_point(shape = "bullet", size = 2, colour = "#112446") +
+  geom_smooth(method = "lm", se = FALSE) +
+  labs(
+    x = "Profit",
+    y = "Market capitalization",
+    title = "Linear relationship between mkt cap and profit"
+  ) +
+  theme_linedraw()
+```
+
+Unfortunately, from the above graph, it seems that a female management negatively affects the corporate market capitalization. However, this result is again biased by the presence of outliers, and, thus, not statistically able to describe a pattern in an unknown population. The final remark could be the investigation of whether and why almost all the anomalous firms are directed by a male CEO.
+
+## Do revenues depend on the number of employees?
+
+### By Nicolò BARBATO
+
+By looking at the correlation matrix, it seems that a positive relationship is likely to exist between revenues and number of employees in the companies of the sample. In particular, it is reasonable to think that the revenue amount in part depends on the number of employees - hence, on the size of the company. Here it follows a scatter plot of the observations with the line that best fit them.
+
+```{r}
+companies_all %>%
+ filter(Number_employees >= 0L & Number_employees <= 1400000L) %>%
+ filter(!(Sector %in% 
+ c("Food, Beverages, Tobacco & Drug Stores", "Motor Vehicles & Parts", "Aerospace & Defense", "Hotels, Restaurants & Leisure", 
+ "Engineering & Construction"))) %>%
+ ggplot() +
+  aes(x = Number_employees, y = Revenue) +
+  geom_point(shape = "circle", size = 1.5, colour = "#112446") +
+  geom_smooth(method="lm", se=FALSE, span = 0.75) +
+  labs(
+    x = "Number of employees",
+    y = "Revenues",
+    title = "Employees/Revenues relationship",
+    subtitle = "Overall analysis"
+  ) +
+  theme_minimal()
+```
+
+As we can see, the positive linear relationship seems to exist, even if it is clear that the observations tend to cluster on the origin of the axis and even if the cloud of points appears quite dispersed. The path of the graph might be due to outliers, or anyway to those limited number of observations that lie on the top/right section of the graph. The same considerations can be confirmed also from the following table, that shows the main statistics of the distributions of the variables under analysis.
+
+```{r}
+companies_all[, c("Revenue", "Number_employees")] %>% 
+  sapply(function(x) round(summary(x), 2)) %>% 
+  datatable(options = list(scrollX = TRUE))
+```
+
+So far, the whole sample has been considered. However, it would be interesting to understand whether the amount of revenues and the number of employees are somehow related to the sector the companies belong to.
+
+```{r}
+companies_all %>%
+ filter(Number_employees >= 0L & Number_employees <= 1400000L) %>%
+ filter(!(Sector %in% 
+ c("Food, Beverages, Tobacco & Drug Stores", "Motor Vehicles & Parts", "Aerospace & Defense", "Hotels, Restaurants & Leisure", 
+ "Engineering & Construction"))) %>%
+ ggplot() +
+ aes(x = Number_employees, y = Revenue, colour = Sector) +
+ geom_point(shape = "circle", 
+ size = 2.45) +
+ scale_color_manual(values = c(`Aerospace & Defense` = "#F8766D", Apparel = "#E8813F", 
+`Business Services` = "#D88D11", Chemicals = "#C29800", Energy = "#A7A200", `Engineering & Construction` = "#83AB05", 
+Financials = "#45B21D", `Food, Beverages, Tobacco & Drug Stores` = "#07B935", `Health Care` = "#00BC5D", 
+`Hotels, Restaurants & Leisure` = "#00BF89", `Household Products` = "#00BFAD", Industrials = "#00BBC9", 
+Materials = "#05B7E4", Media = "#2DABF0", `Motor Vehicles & Parts` = "#569FFC", Retailing = "#878EFD", 
+Technology = "#BA7DFC", Telecommunications = "#E06FF2", Transportation = "#EF68DA", Wholesalers = "#FF61C3"
+)) +
+ labs(x = "Number of employees", y = "Revenues", title = "Employees/Revenues relationship ", subtitle = "Sectorial analysis", 
+ color = "Sector") +
+ theme_minimal()
+```
+
+By looking at this plot, it seems that, according to the sample, there is no such pattern for which companies belonging to a given sector are bigger and have higher revenues.
+
+At this point, it could be worthy to try to build a model that is able, by capturing the pattern between the observation, to predict the revenues a company might achieve according to its number of employees.
+
+```{r}
+regression <- lm(Revenue~Number_employees, data=companies_all)
+summary(regression)
+```
+
+The model is statistically significant (this can be commented by looking at the F-statistic and the related p-value). However, a few consideration should be done. First of all, the model tries to capture a linear relationship between the variables, that might no be the most appropriate one. Secondly, the R-squared statistics - that represents the goodnes of fit of the data - is about 0,53, meaning to say that the model is able to explain a little more than half of the variability of the dependent variable (revenues). The result is not bad per se, but it indicates that the simple linear regression model is not sufficient to make inference and other regressors might be included to provide better predictions. Finally, by looking at the first scatter plot provided, we can see that as long as we move for the bottom-left to the top-right part of the model, the obeservations become more and more dispersed. This might be a first signal of heteroskedasticity, that should be tested and solved with appropriate econometric techniques to create a reliable model.
+
+## Is there a pattern among sectors in rank changing? Are there sectors that on average have gained/lost positions in the ranking?
+
+### By Diego LOZANO and Sergio RODRIGUEZ
+
+Based on the following graph, we can observe that the sectors with the highest positive average change were the ones regarding Materials, alongside with Energy and Motor, Vehicles & Parts. This means that in average, the companies within these sectors are having a better ranking compared to previous years, which can translates to better opportunities in the market, concerning either higher demand, higher investment or higher perception that is related to market capitalization.
+
+On the other hand, the sectors that had the highest negative average change were Telecommunications, alongside with Food, Beverages, Tobacco & Drug Stores, and Aerospace & Defense.
+
+It is important to mention that these changes may consider not only specific financial performances from different companies, but also macro-economical and political aspects that could have beneficial or detrimental consequences for a particular sector.
+
+```{r}
+library(ggplot2)
+library(esquisse)
+library(tidyverse)
+Sector_Change = companies_all %>%
+  select(Sector, Rank_change, Company) %>%
+  group_by(Sector) %>%
+  summarise(avg_change = round(mean(Rank_change), 1)) %>%
+  arrange(desc(avg_change))
+ggplot(Sector_Change) +
+  aes(x = Sector, y = avg_change, fill = avg_change) +
+  geom_col() +
+  geom_label(aes(label=avg_change), size=2.5, color="white")+
+  scale_fill_gradient() +
+  labs(fill="Average Change")+
+  coord_flip() +
+  theme_minimal()+
+  theme(axis.title.x = element_text(size = 0L))
+```
+
+## Analysis of the pattern between revenues and profits. Are there sectors that have a higher impact of costs? Profit margin analysis per sector
+
+### By Diego Lozano
+
+```{r}
+library(data.table)
+library(DT)
+library(tidyverse)
+question2 = companies_all %>%
+  select(Sector, Revenue, Profit) %>%
+  group_by(Sector) %>%
+  summarise(avg_revenue = round(mean(Revenue),0),avg_profit= round(mean(Profit),0))%>%
+  arrange(desc(avg_profit))
+question2.1 = companies_all %>%
+  select(Sector, Revenue, Profit, Company) %>%
+  group_by(Sector) %>%
+  summarise(profit_margin = round((sum(Profit) / sum(Revenue)*100),2)) %>%
+  arrange(desc(profit_margin))
+question2 %>%
+  datatable(options = list(scrollX = TRUE))
+library(ggplot2)
+ggplot(question2) +
+  aes(x = Sector, y = avg_revenue, fill = avg_revenue, weight = avg_revenue) +
+  geom_col() +
+  geom_label(aes(label=avg_revenue), size=2.5, color="white")+
+  scale_fill_gradient() +
+  labs(fill="Average Revenue")+
+  coord_flip() +
+  theme_minimal()+
+  theme(axis.title.x = element_text(size = 0L))
+ggplot(question2) +
+  aes(x = Sector, y = avg_profit, fill = avg_profit, weight = avg_profit) +
+  geom_col() +
+  geom_label(aes(label=avg_profit), size=2.5, color="white")+
+  scale_fill_gradient() +
+  labs(fill="Average Profit")+
+  coord_flip() +
+  theme_minimal()+
+  theme(axis.title.x = element_text(size = 0L))
+```
+
+First, in this table we see that the sectors that drive more revenue in average is the sector of telecommunications. Compared to the second place, this sector has more than 40.000M USD compared to the second place (Technology). Moreover, when talking about profit averages, this sector has the first place as well. This is relevant, however we know that different sectors have different business model, hence the behavior of net income Vs. Net Profit varies depending the sector. On later graphs, we will analyze this aspect more on depth.
+
+```{r}
+question2.1 %>%
+  datatable(options = list(scrollX = TRUE))
+ggplot(question2.1) +
+  aes(x = Sector, y = profit_margin, fill = profit_margin) +
+  geom_col() +
+  geom_label(aes(label=profit_margin), size=2.5, color="white")+
+  scale_fill_gradient() +
+  labs(fill="Average Margin")+
+  coord_flip() +
+  theme_minimal()+
+  theme(axis.title.x = element_text(size = 0L))
+```
+
+In order to compare profits among sectors, we decided to calculate the profit margin. The ranking in this case, changes and now the first place belongs to the technology sector. Based on this information, we can conclude that depending on each sector, the costs varies. The sector which more of the revenues get to the profits are Technology, Financials, and Business Services while there are sectors that the costs consume a major part of the revenues, resulting in small profit margins. Some of these sectors are Aerospace & Defense, Retailing and Wholesalers.
+
+## Analysis of the best performers per sector VS gender of the CEO
+
+### By Sergio RODRIGUEZ
+
+In the following graphs, we are analyzing the performance and the relationship between CEO women and the different companies and sectors that we have in our data set.
+
+When analyzing the first graph, regarding the number of CEO women in all the industrial sectors that we are considering, we can observe that the main sectors to have the higher number of CEO women are: Retailing, Financials, Health Care, Energy and Technology.
+
+In contrast, there are several sectors (Wholesalers, Motor, vehicle & Parts, Media, Engineering & Construction, Chemicals, Apparel) where there is only one CEO woman. Furthermore, there is one sector (Telecommunications) that has no companies with a CEO woman. Ironically, this is the sector with the highest revenue and profit average.
+
+```{r}
+library(tidyverse)
+library(dplyr)
+library(ggplot2)
+companies_all$CEO_woman_binary = ifelse(companies_all$CEO_woman, 1, 0)
+Sector_Gender_Grouped = companies_all %>%
+  group_by(Sector) %>%
+  summarise(Total_CEO_Women = sum(CEO_woman_binary),
+            Avg_Profit = round(mean(Profit), 0)) %>%
+  arrange(desc(Total_CEO_Women))
+# Graph to visualize the amount of CEO woman in all sectors
+ggplot(Sector_Gender_Grouped) +
+  aes(x = Sector, y = Total_CEO_Women, fill = Total_CEO_Women) +
+  geom_col() +
+  geom_label(aes(label=Total_CEO_Women), size=2.5, color="white")+
+  scale_fill_gradient() +
+  coord_flip() +
+  theme_minimal()
+```
+
+Now, if we take a closer look at the top sectors considering the profit average, most of them have a significant number of CEO Woman as shown in the following graph, except for Motor, vehicle & Parts, and Telecommunications.
+
+```{r}
+top5_Sectors = Sector_Gender_Grouped %>% 
+  top_n(5, Avg_Profit)
+# Graph to visualize the amount of CEO woman in the top 5 sectors by profit average
+ggplot(top5_Sectors) +
+  aes(x = Sector, y = Avg_Profit, fill = Total_CEO_Women) +
+  geom_col() +
+  geom_label(aes(label=Total_CEO_Women), size=3.5, color="white")+
+  scale_fill_gradient() +
+  theme_minimal()
+```
+
+Finally, in order to narrow our research, we are considering only the top 5 companies of those 5 main sectors, regarding profit average. When looking at the graph, we can observe that in those 25 companies, there are only 2 companies where you can find CEO women: one in the Financial sector (Citigroup) and the other one in the Motor, vehicle & Parts sector (General Motors). This represents only the 8% of this exclusive sample.
+
+```{r}
+df_top5_Sectors = companies_all %>% 
+  filter(Sector %in% top5_Sectors$Sector)
+df_top5_Sectors_Grouped = df_top5_Sectors %>% 
+  group_by(Sector, Company, CEO_woman_binary) %>% 
+  summarise(Avg_Profit = mean(Profit, na.rm = TRUE)) %>% 
+  arrange(Sector, desc(Avg_Profit))
+df_top5_Companies_grouped = df_top5_Sectors_Grouped %>%
+  group_by(Sector) %>%
+  top_n(5,Avg_Profit)
+df_top5_Companies_grouped %>%
+ ggplot() +
+  aes(
+    x = Company,
+    fill = CEO_woman_binary,
+    colour = Sector,
+    weight = Avg_Profit
+  ) +
+  geom_bar() +
+  scale_x_discrete(labels = c("Comp. 1", "Comp. 2", "Comp. 3", "Comp. 4",
+                              "Comp. 5", "Comp. 6", "Comp. 7", "Comp. 8",
+                              "Comp. 9", "Comp. 10", "Comp. 11", "Comp. 12",
+                              "Comp. 13", "Comp. 14", "Comp. 15", "Comp. 16",
+                              "Comp. 17", "Comp. 18", "Comp. 19", "Comp. 20",
+                              "Comp. 21", "Comp. 22", "Comp. 23", "Comp. 24",
+                              "Comp. 25"))+
+  scale_fill_gradient() +
+  scale_color_hue(direction = 1) +
+  theme_dark()
+```
+
+## Analysis of revenue per state
+
+### By Sergio RODRIGUEZ
+
+When looking at the following geographical map per state, we can realize that the states where the most revenue is being collected are California, Texas and New York. Moreover, when looking at the general distribution of revenue, even though California and Texas are located more into the west side of the map, most of the revenue collected is being retained in the east side (considering also New York) .
+
+This is important, taking into account not only general revenue distribution in the US, which can give us an idea of market opportunities in those areas, but which can also help us visualizing possible states development, due to the taxes that are being collected in those places.
+
+```{r}
+library(ggplot2)
+library(sf)
+library(readxl)
+question6 = companies_all %>%
+  select(Revenue, State) %>%
+  group_by(State) %>%
+  summarise(revenue = sum(Revenue)) %>%
+  arrange(desc(revenue))
+states = map_data("state")
+coordinates = read.csv("~/Desktop/MSc in Business Analytics/Programming for Business Analytics/Neoma_group 2/Hoja de cálculo sin título - Hoja 1.csv")
+coordinates_full =inner_join(coordinates, question6, by = c("State" = "State"))
+States_Names = read_xlsx("~/Desktop/MSc in Business Analytics/Programming for Business Analytics/Neoma_group 2/States_Name.xlsx")
+coordinates_full2 = inner_join(coordinates_full, States_Names, by = c("State" = "State"))
+colnames(coordinates_full2)[5]  <- "region"
+Revenue_Geo = merge(coordinates_full2, states, sort = FALSE, by = "region")
+Revenue_Geo = Revenue_Geo[order(Revenue_Geo$order), ]
+ggplot(Revenue_Geo, aes(long, lat))+
+  geom_polygon(aes(group = group, fill = revenue))+
+  coord_map()
+```
+
+# Conclusions
+
+## By Diego LOZANO
+
+In conclusion, the above project analyzed various aspects of the financial performance of different industrial sectors and their relationship with CEO gender and geographical location among other analysis between Categorical variables VS Cardinal variables, and Cardinal variables Vs Cardinal Variables. The results showed that the sectors with the highest positive average change were Materials, Energy, and Motor, Vehicles & Parts, meaning that in the sample those sector escalated in the revenue raking more than the other, from the previous year, while the sectors with the highest negative average change were Telecommunications, Food, Beverages, Tobacco & Drug Stores, and Aerospace & Defense, marking the trends about sectors that gain relevance on certain historical context. Furthermore, the sector with the highest revenue and profit average was Telecommunications, while the sector with the highest profit margin was Technology.
+
+Regarding the relationship between CEO gender and financial performance, the results showed that the sectors with a higher number of CEO women were Retailing, Financials, Health Care, Energy and Technology. However, when considering the top 5 companies of the 5 main sectors with the highest profit average, there were only 2 companies with CEO women, representing only 8% of the sample.
+
+Finally, the analysis of revenue per state showed that the states with the highest revenue were California (Silicon Valley is a strong driver), Texas, and New York, however, most of the revenue being allocated in the east side of the country.
+
+Overall, this project provides valuable insights into the financial performance of different industrial sectors and the factors that may impact their success. By analyzing the relationship between CEO gender and financial performance, as well as geographical location and revenue, it can help companies and investors make informed decisions about the market opportunities and trends in different industries.
+
+# Individual contribution
+
+## Thomas GATTONE
+
+-   Introduction
+-   Data preparation
+-   Data cleaning
+-   Exploratory data analysis
+-   Investigation of the relationship between market capitalization and profits
+-   Output visualization and impression
+
+## Nicolò BARBATO
+
+-   Introduction
+-   Data preparation
+-   Data cleaning
+-   Exploratory data analysis
+-   Do revenues depend on the number of employees?
+
+## Sergio RODRIGUEZ
+
+-   Is there a pattern among sectors in rank changing? Are there sectors that on average have gained/lost positions in the ranking?
+-   Analysis of the best performers per sector VS gender of the CEO
+-   Analysis of revenue per state
+
+## Diego LOZANO
+
+-   Is there a pattern among sectors in rank changing? Are there sectors that on average have gained/lost positions in the ranking?
+-   Analysis of the pattern between revenues and profits. Are there sectors that have a higher impact of costs? Profit margin analysis per sector
+-   Conclusions
+
+# References
+
+-   <https://www.kaggle.com/datasets/winston56/fortune-500-data-2021>
+-   <https://en.wikipedia.org/wiki/Fortune_1000>
+-   <https://chat.openai.com/chat>
+-   <https://bookdown.org/yih_huynh/Guide-to-R-Book/basic-data-management.html>
+-   <http://r-statistics.co/ggplot2-Tutorial-With-R.html>
+-   <https://fortune.com/ranking/fortune500/>
+-   <https://www.youtube.com/watch?v=BwRwjAbXSSU>
